@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  namespace: microfinance
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: api-gateway
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: /actuator/prometheus
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: api-gateway
+          image: ghcr.io/ORG/microfinance/api-gateway:1.0.0
+          ports: [{name: http, containerPort: 8080}]
+          env:
+            - name: REDIS_HOST
+              valueFrom: {configMapKeyRef: {name: mfin-platform, key: redis-host}}
+            - name: JWKS_URI
+              valueFrom: {configMapKeyRef: {name: mfin-platform, key: jwks-uri}}
+            - name: TOKEN_ISSUER
+              valueFrom: {configMapKeyRef: {name: mfin-platform, key: token-issuer}}
+            - name: RATE_LIMIT_RPS
+              value: "50"
+          resources:
+            requests: {cpu: 200m, memory: 512Mi}
+            limits: {memory: 1Gi}
+          readinessProbe:
+            httpGet: {path: /actuator/health/readiness, port: http}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /actuator/health/liveness, port: http}
+            periodSeconds: 15
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  namespace: microfinance
+spec:
+  selector:
+    app.kubernetes.io/name: api-gateway
+  ports: [{name: http, port: 80, targetPort: http}]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api-gateway
+  namespace: microfinance
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-production
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: 10m
+    # Belt and braces with the gateway's own limiter: this one sheds load before
+    # it reaches a pod at all.
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [api.mfin.example]
+      secretName: mfin-api-tls
+  rules:
+    - host: api.mfin.example
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api-gateway
+                port: {number: 80}

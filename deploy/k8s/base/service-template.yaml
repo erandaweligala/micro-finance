@@ -1,0 +1,190 @@
+# Reference Deployment + Service for a business microservice.
+#
+# Every service follows this shape; only the name, port and database differ.
+# The pieces that matter are called out in comments rather than left implicit,
+# because the defaults Kubernetes gives you are not the ones a financial system
+# wants.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-service
+  namespace: microfinance
+  labels:
+    app.kubernetes.io/name: payment-service
+    app.kubernetes.io/part-of: microfinance
+spec:
+  # Two replicas minimum so a rolling update or a node drain never takes the
+  # service to zero.
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: payment-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0   # never drop below the declared replica count
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: payment-service
+        app.kubernetes.io/part-of: microfinance
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8087"
+        prometheus.io/path: /actuator/prometheus
+    spec:
+      serviceAccountName: payment-service
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      # Give in-flight repayments time to finish before the pod goes away.
+      terminationGracePeriodSeconds: 45
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: payment-service
+      containers:
+        - name: payment-service
+          image: ghcr.io/ORG/microfinance/payment-service:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8087
+          env:
+            - name: SERVER_PORT
+              value: "8087"
+            - name: SPRING_PROFILES_ACTIVE
+              value: production
+            - name: DB_URL
+              valueFrom:
+                secretKeyRef: {name: payment-db, key: url}
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef: {name: payment-db, key: username}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: payment-db, key: password}
+            # Field-encryption keys come from the cluster secret store, which is
+            # backed by the cloud KMS / Vault via the secrets-store CSI driver.
+            - name: CRYPTO_DATA_KEY
+              valueFrom:
+                secretKeyRef: {name: mfin-crypto, key: data-key}
+            - name: CRYPTO_INDEX_KEY
+              valueFrom:
+                secretKeyRef: {name: mfin-crypto, key: index-key}
+            - name: KAFKA_BROKERS
+              valueFrom:
+                configMapKeyRef: {name: mfin-platform, key: kafka-brokers}
+            - name: JWKS_URI
+              valueFrom:
+                configMapKeyRef: {name: mfin-platform, key: jwks-uri}
+            - name: TOKEN_ISSUER
+              valueFrom:
+                configMapKeyRef: {name: mfin-platform, key: token-issuer}
+            - name: OTLP_ENDPOINT
+              valueFrom:
+                configMapKeyRef: {name: mfin-platform, key: otlp-endpoint}
+          resources:
+            requests: {cpu: 250m, memory: 768Mi}
+            limits: {memory: 1536Mi}   # no CPU limit: throttling a JVM under
+                                       # load causes latency spikes, and the
+                                       # request already guarantees a share
+          # Startup probe covers Flyway migrations on a cold database, so a slow
+          # first start is not mistaken for a crash loop.
+          startupProbe:
+            httpGet: {path: /actuator/health/readiness, port: http}
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: {path: /actuator/health/readiness, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            # Liveness checks only that the process is healthy, never its
+            # dependencies: restarting a pod because the database blinked turns
+            # a brief outage into a cluster-wide restart storm.
+            httpGet: {path: /actuator/health/liveness, port: http}
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 5
+          lifecycle:
+            preStop:
+              # Let the load balancer stop sending traffic before shutdown begins.
+              exec: {command: ["sh", "-c", "sleep 5"]}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-service
+  namespace: microfinance
+spec:
+  selector:
+    app.kubernetes.io/name: payment-service
+  ports:
+    - name: http
+      port: 8087
+      targetPort: http
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: payment-service
+  namespace: microfinance
+automountServiceAccountToken: false   # the app never calls the Kubernetes API
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: payment-service
+  namespace: microfinance
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: payment-service
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: payment-service
+  namespace: microfinance
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: payment-service
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 70}
+  behavior:
+    scaleDown:
+      # Scale down slowly: collection peaks are spiky, and shedding capacity
+      # straight after one leaves nothing for the next.
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60

@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mfin-platform
+  namespace: microfinance
+data:
+  kafka-brokers: "kafka-bootstrap.messaging.svc.cluster.local:9092"
+  redis-host: "redis-master.cache.svc.cluster.local"
+  jwks-uri: "http://identity-service.microfinance.svc.cluster.local:8081/oauth2/jwks"
+  token-issuer: "https://api.mfin.example"
+  otlp-endpoint: "http://otel-collector.observability.svc.cluster.local:4318/v1/traces"
+---
+# Illustrative only. Real secrets are never committed: they are provisioned by
+# External Secrets Operator or the secrets-store CSI driver, which pull from the
+# cloud KMS or Vault and rotate without a redeploy.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mfin-crypto
+  namespace: microfinance
+  annotations:
+    kubernetes.io/description: "PLACEHOLDER - replace with an ExternalSecret"
+type: Opaque
+stringData:
+  data-key: "REPLACE_FROM_KMS"
+  index-key: "REPLACE_FROM_KMS"

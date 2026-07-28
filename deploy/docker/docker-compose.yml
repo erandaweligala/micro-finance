@@ -1,0 +1,260 @@
+# Local development stack.
+#
+# Brings up MySQL, Kafka, Redis and the eleven services. Each service owns its
+# own database - they are separate schemas on one MySQL instance here purely to
+# keep a laptop workable; in every deployed environment they are separate
+# instances, because "shares a server" degrades into "shares a schema" the first
+# time someone is in a hurry.
+#
+#   docker compose -f deploy/docker/docker-compose.yml up -d --build
+
+name: microfinance
+
+x-service-defaults: &service-defaults
+  restart: unless-stopped
+  networks: [mfin]
+  depends_on:
+    mysql:
+      condition: service_healthy
+    kafka:
+      condition: service_started
+  environment: &service-env
+    DB_USERNAME: mfin
+    DB_PASSWORD: mfin
+    KAFKA_BROKERS: kafka:9092
+    JWKS_URI: http://identity-service:8081/oauth2/jwks
+    TOKEN_ISSUER: http://identity-service:8081
+    GATEWAY_URL: http://localhost:8080
+    # Development keys only. Every deployed environment injects these from a
+    # secret store; the services refuse to start without them.
+    CRYPTO_DATA_KEY: ZGV2LWRhdGEta2V5LTMyLWJ5dGVzLWxvbmctZm9yLWFlcyE=
+    CRYPTO_INDEX_KEY: ZGV2LWluZGV4LWtleS0zMi1ieXRlcy1sb25nLWZvci1obWFj
+    LOG_LEVEL: INFO
+    TRACE_SAMPLE_RATE: "1.0"
+  healthcheck:
+    test: ["CMD", "wget", "-q", "-O-", "http://localhost:8080/actuator/health/readiness"]
+    interval: 20s
+    timeout: 5s
+    retries: 10
+    start_period: 90s
+
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: mfin-mysql
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      # Financial writes must survive a host failure, so durability is not traded
+      # for throughput even locally - it keeps local behaviour honest.
+      - --innodb-flush-log-at-trx-commit=1
+      - --sync-binlog=1
+      - --max-connections=500
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_USER: mfin
+      MYSQL_PASSWORD: mfin
+      MYSQL_DATABASE: mfin_identity
+    ports: ["3306:3306"]
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./init-databases.sql:/docker-entrypoint-initdb.d/01-databases.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-umfin", "-pmfin"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+    networks: [mfin]
+
+  kafka:
+    image: bitnami/kafka:3.7
+    container_name: mfin-kafka
+    environment:
+      # KRaft mode: no ZooKeeper to run or reason about.
+      KAFKA_CFG_NODE_ID: "1"
+      KAFKA_CFG_PROCESS_ROLES: controller,broker
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    ports: ["9092:9092"]
+    volumes: [kafka-data:/bitnami/kafka]
+    networks: [mfin]
+
+  redis:
+    image: redis:7-alpine
+    container_name: mfin-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["6379:6379"]
+    volumes: [redis-data:/data]
+    networks: [mfin]
+
+  # --- Edge ------------------------------------------------------------------
+  api-gateway:
+    build:
+      context: ../..
+      dockerfile: backend/Dockerfile
+      args: {SERVICE: api-gateway}
+    container_name: mfin-api-gateway
+    restart: unless-stopped
+    networks: [mfin]
+    ports: ["8080:8080"]
+    environment:
+      REDIS_HOST: redis
+      JWKS_URI: http://identity-service:8081/oauth2/jwks
+      TOKEN_ISSUER: http://identity-service:8081
+      IDENTITY_URI: http://identity-service:8081
+      TENANT_URI: http://tenant-service:8082
+      CUSTOMER_URI: http://customer-service:8083
+      PRODUCT_URI: http://loan-product-service:8084
+      ORIGINATION_URI: http://loan-origination-service:8085
+      LOAN_ACCOUNT_URI: http://loan-account-service:8086
+      PAYMENT_URI: http://payment-service:8087
+      LEDGER_URI: http://ledger-service:8088
+      NOTIFICATION_URI: http://notification-service:8089
+      REPORTING_URI: http://reporting-audit-service:8090
+    depends_on: [identity-service, redis]
+
+  # --- Business services -----------------------------------------------------
+  identity-service:
+    <<: *service-defaults
+    build:
+      context: ../..
+      dockerfile: backend/Dockerfile
+      args: {SERVICE: identity-service}
+    container_name: mfin-identity
+    ports: ["8081:8081"]
+    environment:
+      <<: *service-env
+      SERVER_PORT: "8081"
+      DB_URL: jdbc:mysql://mysql:3306/mfin_identity?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+
+  tenant-service:
+    <<: *service-defaults
+    build:
+      context: ../..
+      dockerfile: backend/Dockerfile
+      args: {SERVICE: tenant-service}
+    container_name: mfin-tenant
+    ports: ["8082:8082"]
+    environment:
+      <<: *service-env
+      SERVER_PORT: "8082"
+      DB_URL: jdbc:mysql://mysql:3306/mfin_tenant?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+
+  customer-service:
+    <<: *service-defaults
+    build:
+      context: ../..
+      dockerfile: backend/Dockerfile
+      args: {SERVICE: customer-service}
+    container_name: mfin-customer
+    ports: ["8083:8083"]
+    environment:
+      <<: *service-env
+      SERVER_PORT: "8083"
+      DB_URL: jdbc:mysql://mysql:3306/mfin_customer?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+
+  loan-product-service:
+    <<: *service-defaults
+    build:
+      context: ../..
+      dockerfile: backend/Dockerfile
+      args: {SERVICE: loan-product-service}
+    container_name: mfin-loan-product
+    ports: ["8084:8084"]
+    environment:
+      <<: *service-env
+      SERVER_PORT: "8084"
+      DB_URL: jdbc:mysql://mysql:3306/mfin_product?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+
+  loan-origination-service:
+    <<: *service-defaults
+    build:
+      context: ../..
+      dockerfile: backend/Dockerfile
+      args: {SERVICE: loan-origination-service}
+    container_name: mfin-origination
+    ports: ["8085:8085"]
+    environment:
+      <<: *service-env
+      SERVER_PORT: "8085"
+      DB_URL: jdbc:mysql://mysql:3306/mfin_origination?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+
+  loan-account-service:
+    <<: *service-defaults
+    build:
+      context: ../..
+      dockerfile: backend/Dockerfile
+      args: {SERVICE: loan-account-service}
+    container_name: mfin-loan-account
+    ports: ["8086:8086"]
+    environment:
+      <<: *service-env
+      SERVER_PORT: "8086"
+      DB_URL: jdbc:mysql://mysql:3306/mfin_loanaccount?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+
+  payment-service:
+    <<: *service-defaults
+    build:
+      context: ../..
+      dockerfile: backend/Dockerfile
+      args: {SERVICE: payment-service}
+    container_name: mfin-payment
+    ports: ["8087:8087"]
+    environment:
+      <<: *service-env
+      SERVER_PORT: "8087"
+      DB_URL: jdbc:mysql://mysql:3306/mfin_payment?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+
+  ledger-service:
+    <<: *service-defaults
+    build:
+      context: ../..
+      dockerfile: backend/Dockerfile
+      args: {SERVICE: ledger-service}
+    container_name: mfin-ledger
+    ports: ["8088:8088"]
+    environment:
+      <<: *service-env
+      SERVER_PORT: "8088"
+      DB_URL: jdbc:mysql://mysql:3306/mfin_ledger?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+
+  notification-service:
+    <<: *service-defaults
+    build:
+      context: ../..
+      dockerfile: backend/Dockerfile
+      args: {SERVICE: notification-service}
+    container_name: mfin-notification
+    ports: ["8089:8089"]
+    environment:
+      <<: *service-env
+      SERVER_PORT: "8089"
+      DB_URL: jdbc:mysql://mysql:3306/mfin_notification?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+
+  reporting-audit-service:
+    <<: *service-defaults
+    build:
+      context: ../..
+      dockerfile: backend/Dockerfile
+      args: {SERVICE: reporting-audit-service}
+    container_name: mfin-reporting
+    ports: ["8090:8090"]
+    environment:
+      <<: *service-env
+      SERVER_PORT: "8090"
+      DB_URL: jdbc:mysql://mysql:3306/mfin_reporting?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+
+volumes:
+  mysql-data:
+  kafka-data:
+  redis-data:
+
+networks:
+  mfin:
+    driver: bridge

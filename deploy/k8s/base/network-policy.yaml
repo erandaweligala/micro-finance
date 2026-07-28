@@ -1,0 +1,75 @@
+# Default deny, then allow only what each service legitimately needs.
+#
+# Without this, a compromised notification service could read the payment
+# service's database directly. Network policy is what makes "services own their
+# data" an enforced boundary rather than a convention.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: microfinance
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: microfinance
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+# Only the gateway may be reached from the ingress controller.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-ingress
+  namespace: microfinance
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: api-gateway}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: ingress-nginx}
+      ports: [{protocol: TCP, port: 8080}]
+---
+# Business services accept traffic from the gateway and from each other, and
+# nothing else.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: service-mesh-internal
+  namespace: microfinance
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/part-of: microfinance}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/part-of: microfinance}
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: api-gateway}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/part-of: microfinance}
+    # Databases, Kafka and Redis live outside the namespace CIDR.
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/8
+      ports:
+        - {protocol: TCP, port: 3306}
+        - {protocol: TCP, port: 9092}
+        - {protocol: TCP, port: 6379}

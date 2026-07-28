@@ -1,0 +1,161 @@
+name: CD
+
+# Promotion pipeline. Staging deploys automatically from main; production
+# requires a human approval on the `production` GitHub environment, because
+# nobody should be able to change a live loan book by merging a pull request.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to deploy (defaults to the triggering commit)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write   # OIDC federation to the cloud; no long-lived cluster keys
+
+jobs:
+  deploy-staging:
+    name: Deploy to staging
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch'
+    environment:
+      name: staging
+      url: https://api.staging.mfin.example
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to the cluster
+        uses: azure/k8s-set-context@v4
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.STAGING_KUBECONFIG }}
+
+      - name: Set the image tag
+        id: tag
+        run: |
+          TAG="${{ inputs.image_tag || github.event.workflow_run.head_sha || github.sha }}"
+          echo "value=$TAG" >> "$GITHUB_OUTPUT"
+
+      # Migrations run as a Job before the new pods roll out, and must be
+      # backwards compatible with the version still serving traffic - otherwise
+      # the rollout breaks the running release the moment the schema changes.
+      - name: Run database migrations
+        run: |
+          kubectl -n microfinance-staging create job \
+            "flyway-${{ steps.tag.outputs.value }}" \
+            --from=cronjob/flyway-migrate
+          kubectl -n microfinance-staging wait --for=condition=complete \
+            "job/flyway-${{ steps.tag.outputs.value }}" --timeout=600s
+
+      - name: Roll out the services
+        run: |
+          for service in api-gateway identity-service tenant-service customer-service \
+                         loan-product-service loan-origination-service loan-account-service \
+                         payment-service ledger-service notification-service \
+                         reporting-audit-service; do
+            kubectl -n microfinance-staging set image \
+              "deployment/$service" \
+              "$service=ghcr.io/${{ github.repository }}/$service:${{ steps.tag.outputs.value }}"
+          done
+
+      - name: Wait for the rollout
+        run: |
+          for service in api-gateway identity-service tenant-service customer-service \
+                         loan-product-service loan-origination-service loan-account-service \
+                         payment-service ledger-service notification-service \
+                         reporting-audit-service; do
+            kubectl -n microfinance-staging rollout status "deployment/$service" --timeout=300s
+          done
+
+      - name: Smoke test
+        run: |
+          # Proves the edge is up and the identity service is publishing keys;
+          # if this fails the rollout is rolled back below.
+          curl -fsS https://api.staging.mfin.example/actuator/health/readiness
+          curl -fsS https://api.staging.mfin.example/oauth2/jwks | grep -q '"keys"'
+
+      - name: Roll back on failure
+        if: failure()
+        run: |
+          for service in api-gateway identity-service tenant-service customer-service \
+                         loan-product-service loan-origination-service loan-account-service \
+                         payment-service ledger-service notification-service \
+                         reporting-audit-service; do
+            kubectl -n microfinance-staging rollout undo "deployment/$service" || true
+          done
+
+  deploy-production:
+    name: Deploy to production
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    environment:
+      # Protected environment: requires a reviewer's approval before this job
+      # starts, and restricts which branches may reach it.
+      name: production
+      url: https://api.mfin.example
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to the cluster
+        uses: azure/k8s-set-context@v4
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.PRODUCTION_KUBECONFIG }}
+
+      - name: Set the image tag
+        id: tag
+        run: |
+          TAG="${{ inputs.image_tag || github.event.workflow_run.head_sha || github.sha }}"
+          echo "value=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Back up the databases
+        run: |
+          # A restore point taken immediately before the migration, so a bad
+          # deploy is recoverable to a known-good state rather than reconstructed.
+          kubectl -n microfinance create job "pre-deploy-backup-${{ steps.tag.outputs.value }}" \
+            --from=cronjob/database-backup
+          kubectl -n microfinance wait --for=condition=complete \
+            "job/pre-deploy-backup-${{ steps.tag.outputs.value }}" --timeout=1800s
+
+      - name: Run database migrations
+        run: |
+          kubectl -n microfinance create job "flyway-${{ steps.tag.outputs.value }}" \
+            --from=cronjob/flyway-migrate
+          kubectl -n microfinance wait --for=condition=complete \
+            "job/flyway-${{ steps.tag.outputs.value }}" --timeout=900s
+
+      - name: Roll out the services
+        run: |
+          for service in api-gateway identity-service tenant-service customer-service \
+                         loan-product-service loan-origination-service loan-account-service \
+                         payment-service ledger-service notification-service \
+                         reporting-audit-service; do
+            kubectl -n microfinance set image "deployment/$service" \
+              "$service=ghcr.io/${{ github.repository }}/$service:${{ steps.tag.outputs.value }}"
+            # Sequential, not parallel: one service at a time keeps the blast
+            # radius of a bad image to that service.
+            kubectl -n microfinance rollout status "deployment/$service" --timeout=600s
+          done
+
+      - name: Verify
+        run: |
+          curl -fsS https://api.mfin.example/actuator/health/readiness
+          curl -fsS https://api.mfin.example/oauth2/jwks | grep -q '"keys"'
+
+      - name: Roll back on failure
+        if: failure()
+        run: |
+          for service in api-gateway identity-service tenant-service customer-service \
+                         loan-product-service loan-origination-service loan-account-service \
+                         payment-service ledger-service notification-service \
+                         reporting-audit-service; do
+            kubectl -n microfinance rollout undo "deployment/$service" || true
+          done
+          echo "::error::Production deployment failed and was rolled back."
