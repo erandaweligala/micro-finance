@@ -1,0 +1,43 @@
+name: mfin_mobile
+description: Multi-tenant microfinance field and branch application.
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State management. Riverpod is chosen over Bloc here because most of this app is
+  # read-heavy async data, and Riverpod's AsyncValue models loading/data/error as one
+  # type - which is exactly the four-state UI contract every screen has to honour.
+  flutter_riverpod: ^2.5.1
+
+  # HTTP. Dio gives us interceptors, which is where token refresh and correlation ids live.
+  dio: ^5.4.3+1
+
+  # Tokens are kept in the iOS Keychain / Android EncryptedSharedPreferences, never in
+  # SharedPreferences and never on disk in the clear.
+  flutter_secure_storage: ^9.2.2
+
+  # Declarative routing with redirect-based auth guards.
+  go_router: ^14.2.0
+
+  # Currency and date formatting per locale.
+  intl: ^0.19.0
+
+  # Small immutable value helpers.
+  equatable: ^2.0.5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  mocktail: ^1.0.4
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
