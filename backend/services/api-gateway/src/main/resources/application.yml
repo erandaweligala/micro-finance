@@ -1,0 +1,202 @@
+server:
+  port: 8080
+  shutdown: graceful
+
+spring:
+  application:
+    name: api-gateway
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
+  # Redis backs the distributed rate limiter, so the quota is shared across gateway replicas
+  # rather than each pod granting the full allowance independently.
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 2s
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          jwk-set-uri: ${JWKS_URI:http://identity-service:8081/oauth2/jwks}
+          issuer-uri: ${TOKEN_ISSUER:http://identity-service:8081}
+
+  cloud:
+    gateway:
+      httpclient:
+        connect-timeout: 2000
+        response-timeout: 10s
+      default-filters:
+        # A single default limiter protects every route; individual routes tighten it below.
+        - name: RequestRateLimiter
+          args:
+            key-resolver: "#{@tenantKeyResolver}"
+            redis-rate-limiter.replenishRate: ${RATE_LIMIT_RPS:50}
+            redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST:100}
+            redis-rate-limiter.requestedTokens: 1
+
+      routes:
+        # --- Identity -----------------------------------------------------------------
+        # Sign-in is rate limited far more tightly and by IP, because there is no tenant
+        # yet and this is the endpoint credential-stuffing attacks aim at.
+        - id: auth-login
+          uri: ${IDENTITY_URI:http://identity-service:8081}
+          predicates:
+            - Path=/api/v1/auth/login,/api/v1/auth/platform-login,/api/v1/auth/forgot-password
+          filters:
+            - name: RequestRateLimiter
+              args:
+                key-resolver: "#{@ipKeyResolver}"
+                redis-rate-limiter.replenishRate: 5
+                redis-rate-limiter.burstCapacity: 10
+            - name: CircuitBreaker
+              args:
+                name: identity-service
+                fallbackUri: forward:/fallback/identity-service
+
+        - id: identity-service
+          uri: ${IDENTITY_URI:http://identity-service:8081}
+          predicates:
+            - Path=/api/v1/auth/**,/api/v1/users/**,/oauth2/**,/.well-known/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: identity-service
+                fallbackUri: forward:/fallback/identity-service
+
+        # --- Tenancy ------------------------------------------------------------------
+        - id: tenant-service
+          uri: ${TENANT_URI:http://tenant-service:8082}
+          predicates:
+            - Path=/api/v1/tenants/**,/api/v1/subscription-plans/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: tenant-service
+                fallbackUri: forward:/fallback/tenant-service
+
+        # --- Customers ----------------------------------------------------------------
+        - id: customer-service
+          uri: ${CUSTOMER_URI:http://customer-service:8083}
+          predicates:
+            - Path=/api/v1/customers/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: customer-service
+                fallbackUri: forward:/fallback/customer-service
+
+        # --- Products and the calculator ----------------------------------------------
+        - id: loan-product-service
+          uri: ${PRODUCT_URI:http://loan-product-service:8084}
+          predicates:
+            - Path=/api/v1/loan-products/**,/api/v1/loan-calculations/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: loan-product-service
+                fallbackUri: forward:/fallback/loan-product-service
+
+        # --- Origination ---------------------------------------------------------------
+        - id: loan-origination-service
+          uri: ${ORIGINATION_URI:http://loan-origination-service:8085}
+          predicates:
+            - Path=/api/v1/loan-applications/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: loan-origination-service
+                fallbackUri: forward:/fallback/loan-origination-service
+
+        # --- Loan accounts --------------------------------------------------------------
+        - id: loan-account-service
+          uri: ${LOAN_ACCOUNT_URI:http://loan-account-service:8086}
+          predicates:
+            - Path=/api/v1/loan-accounts/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: loan-account-service
+                fallbackUri: forward:/fallback/loan-account-service
+
+        # --- Payments -------------------------------------------------------------------
+        # Money-moving endpoints are never retried by the gateway: the client owns the
+        # decision to retry, and it carries an Idempotency-Key when it does.
+        - id: payment-service
+          uri: ${PAYMENT_URI:http://payment-service:8087}
+          predicates:
+            - Path=/api/v1/payments/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: payment-service
+                fallbackUri: forward:/fallback/payment-service
+
+        # --- Ledger ---------------------------------------------------------------------
+        - id: ledger-service
+          uri: ${LEDGER_URI:http://ledger-service:8088}
+          predicates:
+            - Path=/api/v1/ledger/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: ledger-service
+                fallbackUri: forward:/fallback/ledger-service
+
+        # --- Notifications ---------------------------------------------------------------
+        - id: notification-service
+          uri: ${NOTIFICATION_URI:http://notification-service:8089}
+          predicates:
+            - Path=/api/v1/notifications/**
+
+        # --- Reporting and audit ----------------------------------------------------------
+        - id: reporting-audit-service
+          uri: ${REPORTING_URI:http://reporting-audit-service:8090}
+          predicates:
+            - Path=/api/v1/reports/**,/api/v1/audit/**,/api/v1/dashboard
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: reporting-audit-service
+                fallbackUri: forward:/fallback/reporting-audit-service
+
+resilience4j:
+  circuitbreaker:
+    configs:
+      default:
+        slidingWindowSize: 20
+        failureRateThreshold: 50
+        waitDurationInOpenState: 20s
+        permittedNumberOfCallsInHalfOpenState: 5
+        registerHealthIndicator: true
+  timelimiter:
+    configs:
+      default:
+        timeoutDuration: 10s
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,gateway
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when_authorized
+  metrics:
+    tags:
+      application: api-gateway
+  tracing:
+    sampling:
+      probability: ${TRACE_SAMPLE_RATE:0.1}
+  otlp:
+    tracing:
+      endpoint: ${OTLP_ENDPOINT:http://otel-collector:4318/v1/traces}
+
+logging:
+  level:
+    root: INFO
+    org.springframework.cloud.gateway: ${GATEWAY_LOG_LEVEL:INFO}

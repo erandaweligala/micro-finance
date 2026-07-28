@@ -1,0 +1,30 @@
+# Java / Maven
+target/
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+
+# Flutter / Dart
+.dart_tool/
+.packages
+build/
+*.iml
+.flutter-plugins
+.flutter-plugins-dependencies
+pubspec.lock
+
+# IDE
+.idea/
+.vscode/
+*.iws
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets - never commit these
+*.pem
+*.p12
+.env
+.env.*
+!.env.example
