@@ -27,12 +27,18 @@ x-service-defaults: &service-defaults
     GATEWAY_URL: http://localhost:8080
     # Development keys only. Every deployed environment injects these from a
     # secret store; the services refuse to start without them.
-    CRYPTO_DATA_KEY: ZGV2LWRhdGEta2V5LTMyLWJ5dGVzLWxvbmctZm9yLWFlcyE=
+    # The data key must decode to exactly 16, 24 or 32 bytes - AES rejects any
+    # other length, and it does so on the first encrypted write rather than at
+    # startup, so a wrong length looks like a working stack until it isn't.
+    CRYPTO_DATA_KEY: ZGV2LWRhdGEta2V5LTMyLWJ5dGVzLWFlcy1sb2NhbCE=
     CRYPTO_INDEX_KEY: ZGV2LWluZGV4LWtleS0zMi1ieXRlcy1sb25nLWZvci1obWFj
     LOG_LEVEL: INFO
     TRACE_SAMPLE_RATE: "1.0"
   healthcheck:
-    test: ["CMD", "wget", "-q", "-O-", "http://localhost:8080/actuator/health/readiness"]
+    # Each service listens on its own SERVER_PORT, so the probe has to read it
+    # rather than assume 8080 - the "$$" defers expansion to the container.
+    test: ["CMD-SHELL",
+           "wget -q -O- http://localhost:$${SERVER_PORT:-8080}/actuator/health/readiness || exit 1"]
     interval: 20s
     timeout: 5s
     retries: 10

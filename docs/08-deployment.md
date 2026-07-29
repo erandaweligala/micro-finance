@@ -28,7 +28,59 @@ workable; in every deployed environment they are separate instances, because "sh
 degrades into "shares a schema" the first time someone is in a hurry.
 
 The Compose file ships development encryption keys. Every deployed environment injects them
-from a secret store, and the services refuse to start without them.
+from a secret store, and the services refuse to start without them. `CRYPTO_DATA_KEY` must
+decode to exactly 16, 24 or 32 bytes: AES rejects any other length on the first encrypted
+write, not at startup, so the stack looks healthy until the first customer is created.
+
+A fresh stack has no users. The identity schema seeds none, so before anything can be signed
+in, insert a platform operator directly - the password is BCrypt, so hash it with the same
+encoder the service uses:
+
+```sql
+-- mfin_identity. The hash below is BCrypt("ChangeMe123!") at strength 12,
+-- which is what JwtKeyConfig configures the encoder with.
+INSERT INTO app_user (id, tenant_id, username, email, full_name, password_hash,
+                      password_updated_at, must_change_password, status, created_at)
+VALUES (UUID(), NULL, 'platform.admin', 'admin@local', 'Local Platform Admin',
+        '$2a$12$jTdxre6kR/ISSpdUhHCVp.XrN11FKoNm63zrmCL6ztSy6ag17lAOi',
+        NOW(6), 0, 'ACTIVE', NOW(6));
+INSERT INTO app_user_role (user_id, role)
+SELECT id, 'PLATFORM_ADMIN' FROM app_user WHERE username = 'platform.admin';
+```
+
+Then `POST /api/v1/auth/platform-login` with those credentials returns the token every other
+endpoint authorises against.
+
+### Running one service from an IDE against the Compose stack
+
+The usual debugging shape: infrastructure in containers, the service under test on the host.
+
+```bash
+# Infrastructure only - no application containers
+docker compose -f deploy/docker/docker-compose.yml up -d mysql kafka redis
+
+# Install the shared libraries into ~/.m2 once, from the aggregator
+mvn -f backend/pom.xml install -DskipTests
+```
+
+Every service's `application.yml` already defaults `DB_URL`, `KAFKA_BROKERS` and `REDIS_HOST`
+to `localhost`, and each defaults to its own database, so a service started on the host needs
+only the encryption keys:
+
+```bash
+CRYPTO_DATA_KEY=ZGV2LWRhdGEta2V5LTMyLWJ5dGVzLWFlcy1sb2NhbCE= \
+CRYPTO_INDEX_KEY=ZGV2LWluZGV4LWtleS0zMi1ieXRlcy1sb25nLWZvci1obWFj \
+mvn -f backend/pom.xml -pl services/identity-service spring-boot:run
+```
+
+Two things differ from the container defaults. The gateway's downstream URIs default to
+Docker service names, so running it on the host needs `IDENTITY_URI=http://localhost:8081`
+and the equivalent for each service it routes to. And a service run on the host must not
+also be running in Compose - the two would contend for the same port.
+
+In IntelliJ, link `backend/pom.xml` as the Maven root project (not an individual module POM,
+which cannot resolve its `com.mfin` siblings on its own) and set the environment variables
+above on the Spring Boot run configuration.
 
 ### Running the mobile app against it
 
