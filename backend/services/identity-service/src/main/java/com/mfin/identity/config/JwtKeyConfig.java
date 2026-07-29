@@ -20,6 +20,7 @@ import java.security.interfaces.RSAPublicKey;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.RSAPublicKeySpec;
 import java.util.Base64;
+import java.util.UUID;
 
 /**
  * Token signing material and the password hashing strategy.
@@ -45,9 +46,16 @@ public class JwtKeyConfig {
             KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
             generator.initialize(2048);
             KeyPair keyPair = generator.generateKeyPair();
+            // A new key needs a new key id. Resource servers cache the JWKS and only re-fetch it
+            // when they meet a kid they do not know; publishing fresh key material under the
+            // configured id hands them a different key under an id they already hold, so they
+            // keep verifying against the previous public key and reject every token this service
+            // issues - until each one is restarted in turn. Only the ephemeral branch does this:
+            // a configured key keeps its configured id, because it is stable across restarts.
+            String ephemeralKeyId = properties.getSigningKeyId() + "-" + UUID.randomUUID();
             return new RSAKey.Builder((RSAPublicKey) keyPair.getPublic())
                     .privateKey(keyPair.getPrivate())
-                    .keyID(properties.getSigningKeyId())
+                    .keyID(ephemeralKeyId)
                     .build();
         }
         RSAPrivateKey privateKey = readPrivateKey(pem);
