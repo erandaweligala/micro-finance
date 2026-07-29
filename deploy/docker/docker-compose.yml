@@ -13,6 +13,11 @@ name: microfinance
 x-service-defaults: &service-defaults
   restart: unless-stopped
   networks: [mfin]
+  # Without a limit each JVM applies -XX:MaxRAMPercentage=75 to the whole Docker
+  # VM, so eleven of them each size a heap for three quarters of the machine and
+  # the kernel eventually kills whatever it reaches first - usually MySQL, which
+  # takes the entire stack down with it. 640m leaves roughly a 480m heap.
+  mem_limit: 640m
   depends_on:
     mysql:
       condition: service_healthy
@@ -61,6 +66,8 @@ services:
       MYSQL_USER: mfin
       MYSQL_PASSWORD: mfin
       MYSQL_DATABASE: mfin_identity
+    restart: unless-stopped
+    mem_limit: 1g
     ports: ["${MYSQL_PORT:-3306}:3306"]
     volumes:
       - mysql-data:/var/lib/mysql
@@ -96,6 +103,8 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+    restart: unless-stopped
+    mem_limit: 1g
     ports: ["${KAFKA_PORT:-9092}:9092"]
     # Deliberately no volume. The broker runs unprivileged, so a named volume
     # mounts root-owned and the log dir is unwritable. Local broker state is
@@ -106,6 +115,8 @@ services:
     image: redis:7-alpine
     container_name: mfin-redis
     command: ["redis-server", "--appendonly", "yes"]
+    restart: unless-stopped
+    mem_limit: 256m
     ports: ["${REDIS_PORT:-6379}:6379"]
     volumes: [redis-data:/data]
     networks: [mfin]
@@ -118,6 +129,7 @@ services:
       args: {SERVICE: api-gateway}
     container_name: mfin-api-gateway
     restart: unless-stopped
+    mem_limit: 640m
     networks: [mfin]
     ports: ["${GATEWAY_PORT:-8080}:8080"]
     environment:
