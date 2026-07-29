@@ -35,7 +35,7 @@ public class IdempotencyRecord extends TenantAwareEntity {
     private String operation;
 
     /** SHA-256 of the canonical request body, to tell a genuine retry from key reuse. */
-    @Column(name = "request_hash", nullable = false, length = 64, updatable = false)
+    @Column(name = "request_hash", nullable = false, length = 64, columnDefinition = "CHAR(64)", updatable = false)
     private String requestHash;
 
     /** Serialised original response, replayed verbatim on retry. */

@@ -45,7 +45,7 @@ public class LoanProduct extends TenantAwareEntity {
     @Column(name = "description", length = 512)
     private String description;
 
-    @Column(name = "currency", nullable = false, length = 3)
+    @Column(name = "currency", nullable = false, length = 3, columnDefinition = "CHAR(3)")
     private String currency;
 
     /** Decimal places of the currency: 2 for KES/USD/LKR, 0 for UGX/JPY. */

@@ -93,7 +93,7 @@ public class LedgerEntry extends TenantAwareEntity {
     @Column(name = "total_outstanding", nullable = false, precision = 19, scale = 4, updatable = false)
     private BigDecimal totalOutstanding = BigDecimal.ZERO;
 
-    @Column(name = "currency", nullable = false, length = 3, updatable = false)
+    @Column(name = "currency", nullable = false, length = 3, columnDefinition = "CHAR(3)", updatable = false)
     private String currency;
 
     /** The domain event that produced this line; makes replay idempotent and auditable. */

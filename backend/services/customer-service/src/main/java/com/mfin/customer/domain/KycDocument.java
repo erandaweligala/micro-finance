@@ -61,7 +61,7 @@ public class KycDocument extends TenantAwareEntity {
     private Long fileSizeBytes;
 
     /** SHA-256 of the uploaded file, so tampering after upload is detectable. */
-    @Column(name = "checksum", length = 64)
+    @Column(name = "checksum", length = 64, columnDefinition = "CHAR(64)")
     private String checksum;
 
     @Enumerated(EnumType.STRING)

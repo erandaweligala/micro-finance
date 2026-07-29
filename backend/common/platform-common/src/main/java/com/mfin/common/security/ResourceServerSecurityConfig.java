@@ -80,14 +80,24 @@ public class ResourceServerSecurityConfig {
                 .build();
     }
 
-    /** Maps the {@code roles} claim onto Spring Security authorities. */
+    /**
+     * Maps the {@code roles} claim onto Spring Security authorities.
+     *
+     * <p>Deliberately an anonymous class rather than a lambda. Spring's MVC conversion service
+     * collects every {@code Converter} bean and reflects on its generic parameters; a lambda
+     * erases them, and the context fails to start with "Unable to determine source type &lt;S&gt;
+     * and target type &lt;T&gt; for your Converter".</p>
+     */
     @Bean
     public Converter<Jwt, AbstractAuthenticationToken> jwtAuthenticationConverter() {
-        return jwt -> {
-            Collection<GrantedAuthority> authorities = extractRoles(jwt).stream()
-                    .map(role -> (GrantedAuthority) new SimpleGrantedAuthority("ROLE_" + role))
-                    .toList();
-            return new JwtAuthenticationToken(jwt, authorities, jwt.getSubject());
+        return new Converter<Jwt, AbstractAuthenticationToken>() {
+            @Override
+            public AbstractAuthenticationToken convert(Jwt jwt) {
+                Collection<GrantedAuthority> authorities = extractRoles(jwt).stream()
+                        .map(role -> (GrantedAuthority) new SimpleGrantedAuthority("ROLE_" + role))
+                        .toList();
+                return new JwtAuthenticationToken(jwt, authorities, jwt.getSubject());
+            }
         };
     }
 

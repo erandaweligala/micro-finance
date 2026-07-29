@@ -60,7 +60,7 @@ public class LoanApplication extends TenantAwareEntity {
     @Column(name = "product_name", length = 128)
     private String productName;
 
-    @Column(name = "currency", nullable = false, length = 3)
+    @Column(name = "currency", nullable = false, length = 3, columnDefinition = "CHAR(3)")
     private String currency;
 
     // ---- Requested terms ----

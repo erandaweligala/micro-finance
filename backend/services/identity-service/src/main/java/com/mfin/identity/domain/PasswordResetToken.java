@@ -20,7 +20,7 @@ public class PasswordResetToken extends BaseEntity {
     @Column(name = "user_id", nullable = false, columnDefinition = "CHAR(36)")
     private UUID userId;
 
-    @Column(name = "token_hash", nullable = false, length = 64)
+    @Column(name = "token_hash", nullable = false, length = 64, columnDefinition = "CHAR(64)")
     private String tokenHash;
 
     @Column(name = "expires_at", nullable = false)

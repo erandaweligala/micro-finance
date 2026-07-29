@@ -31,7 +31,7 @@ public class RefreshToken extends BaseEntity {
     @Column(name = "tenant_id", columnDefinition = "CHAR(36)")
     private UUID tenantId;
 
-    @Column(name = "token_hash", nullable = false, length = 64)
+    @Column(name = "token_hash", nullable = false, length = 64, columnDefinition = "CHAR(64)")
     private String tokenHash;
 
     /** Shared by every token descended from one sign-in, so the chain can be revoked together. */

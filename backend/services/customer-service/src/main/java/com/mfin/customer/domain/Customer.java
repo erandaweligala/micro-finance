@@ -79,21 +79,21 @@ public class Customer extends TenantAwareEntity {
     private String nationalId;
 
     /** HMAC of the national id; enables uniqueness and lookup without exposing the value. */
-    @Column(name = "national_id_index", nullable = false, length = 64)
+    @Column(name = "national_id_index", nullable = false, length = 64, columnDefinition = "CHAR(64)")
     private String nationalIdIndex;
 
     @Convert(converter = EncryptedStringConverter.class)
     @Column(name = "phone_number", nullable = false, length = 512)
     private String phoneNumber;
 
-    @Column(name = "phone_index", nullable = false, length = 64)
+    @Column(name = "phone_index", nullable = false, length = 64, columnDefinition = "CHAR(64)")
     private String phoneIndex;
 
     @Convert(converter = EncryptedStringConverter.class)
     @Column(name = "email", length = 512)
     private String email;
 
-    @Column(name = "email_index", length = 64)
+    @Column(name = "email_index", length = 64, columnDefinition = "CHAR(64)")
     private String emailIndex;
 
     @Embedded

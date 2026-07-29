@@ -38,7 +38,7 @@ public class SubscriptionPlan extends BaseEntity {
     @Column(name = "monthly_price", nullable = false, precision = 19, scale = 4)
     private BigDecimal monthlyPrice = BigDecimal.ZERO;
 
-    @Column(name = "currency", nullable = false, length = 3)
+    @Column(name = "currency", nullable = false, length = 3, columnDefinition = "CHAR(3)")
     private String currency = "USD";
 
     /** Zero means unlimited, which is how the enterprise plan is expressed. */

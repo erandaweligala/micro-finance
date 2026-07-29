@@ -67,10 +67,10 @@ public class AuditLog extends BaseEntity {
     @Column(name = "occurred_at", nullable = false, updatable = false)
     private Instant occurredAt;
 
-    @Column(name = "previous_hash", length = 64, updatable = false)
+    @Column(name = "previous_hash", length = 64, columnDefinition = "CHAR(64)", updatable = false)
     private String previousHash;
 
-    @Column(name = "entry_hash", nullable = false, length = 64, updatable = false)
+    @Column(name = "entry_hash", nullable = false, length = 64, columnDefinition = "CHAR(64)", updatable = false)
     private String entryHash;
 
     protected AuditLog() {

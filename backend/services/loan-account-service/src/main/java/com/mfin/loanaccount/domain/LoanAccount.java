@@ -58,7 +58,7 @@ public class LoanAccount extends TenantAwareEntity {
     @Column(name = "product_id", nullable = false, columnDefinition = "CHAR(36)")
     private UUID productId;
 
-    @Column(name = "currency", nullable = false, length = 3)
+    @Column(name = "currency", nullable = false, length = 3, columnDefinition = "CHAR(3)")
     private String currency;
 
     @Column(name = "currency_scale", nullable = false)

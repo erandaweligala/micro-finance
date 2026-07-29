@@ -49,10 +49,10 @@ public class Tenant extends BaseEntity {
     @Column(name = "contact_phone", length = 32)
     private String contactPhone;
 
-    @Column(name = "country_code", length = 2)
+    @Column(name = "country_code", length = 2, columnDefinition = "CHAR(2)")
     private String countryCode;
 
-    @Column(name = "default_currency", nullable = false, length = 3)
+    @Column(name = "default_currency", nullable = false, length = 3, columnDefinition = "CHAR(3)")
     private String defaultCurrency = "KES";
 
     @Column(name = "timezone", nullable = false, length = 64)

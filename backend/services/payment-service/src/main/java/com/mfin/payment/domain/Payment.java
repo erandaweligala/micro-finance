@@ -56,7 +56,7 @@ public class Payment extends TenantAwareEntity {
     @Column(name = "amount", nullable = false, precision = 19, scale = 4, updatable = false)
     private BigDecimal amount;
 
-    @Column(name = "currency", nullable = false, length = 3, updatable = false)
+    @Column(name = "currency", nullable = false, length = 3, columnDefinition = "CHAR(3)", updatable = false)
     private String currency;
 
     @Enumerated(EnumType.STRING)
