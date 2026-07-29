@@ -39,6 +39,10 @@ x-service-defaults: &service-defaults
     CRYPTO_INDEX_KEY: ZGV2LWluZGV4LWtleS0zMi1ieXRlcy1sb25nLWZvci1obWFj
     LOG_LEVEL: INFO
     TRACE_SAMPLE_RATE: "1.0"
+    # This stack ships no OpenTelemetry collector, and the exporter's default
+    # endpoint resolves to nothing - leaving it on means an UnknownHostException
+    # stack trace every few seconds in every service, which buries real errors.
+    MANAGEMENT_TRACING_ENABLED: "false"
   healthcheck:
     # Each service listens on its own SERVER_PORT, so the probe has to read it
     # rather than assume 8080 - the "$$" defers expansion to the container.
@@ -133,6 +137,8 @@ services:
     networks: [mfin]
     ports: ["${GATEWAY_PORT:-8080}:8080"]
     environment:
+      # Same reason as the services above: no collector in this stack.
+      MANAGEMENT_TRACING_ENABLED: "false"
       REDIS_HOST: redis
       JWKS_URI: http://identity-service:8081/oauth2/jwks
       TOKEN_ISSUER: http://identity-service:8081
