@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Shared build for every Spring Boot service.
 # Build with:  docker build --build-arg SERVICE=payment-service -f backend/Dockerfile .
 
@@ -13,11 +14,18 @@ COPY backend/common/platform-common/pom.xml ./backend/common/platform-common/pom
 COPY backend/common/loan-engine/pom.xml ./backend/common/loan-engine/pom.xml
 COPY backend/services ./backend/services
 RUN find backend/services -mindepth 2 -maxdepth 2 ! -name pom.xml -exec rm -rf {} + || true
-RUN mvn -f backend/pom.xml -B -q dependency:go-offline -DskipTests || true
+# The local repository lives in a shared BuildKit cache rather than inside the
+# image layer. Compose builds all eleven services at once, and without this each
+# one resolves the entire dependency tree independently - eleven simultaneous
+# downloads of the same artifacts, which Maven Central throttles into "Remote
+# host terminated the handshake" and a failed build.
+RUN --mount=type=cache,target=/root/.m2/repository,sharing=locked \
+    mvn -f backend/pom.xml -B -q dependency:go-offline -DskipTests || true
 
 COPY backend ./backend
 ARG SERVICE
-RUN mvn -f backend/pom.xml -B -pl services/${SERVICE} -am package -DskipTests
+RUN --mount=type=cache,target=/root/.m2/repository,sharing=locked \
+    mvn -f backend/pom.xml -B -pl services/${SERVICE} -am package -DskipTests
 
 # ---------- Runtime stage ----------
 FROM eclipse-temurin:21-jre-jammy AS runtime
