@@ -35,7 +35,10 @@ x-service-defaults: &service-defaults
     LOG_LEVEL: INFO
     TRACE_SAMPLE_RATE: "1.0"
   healthcheck:
-    test: ["CMD", "wget", "-q", "-O-", "http://localhost:8080/actuator/health/readiness"]
+    # Each service listens on its own SERVER_PORT, so the probe has to read it
+    # rather than assume 8080 - the "$$" defers expansion to the container.
+    test: ["CMD-SHELL",
+           "wget -q -O- http://localhost:$${SERVER_PORT:-8080}/actuator/health/readiness || exit 1"]
     interval: 20s
     timeout: 5s
     retries: 10
