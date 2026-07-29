@@ -21,6 +21,15 @@
       <groupId>org.springframework.cloud</groupId>
       <artifactId>spring-cloud-starter-gateway</artifactId>
     </dependency>
+    <!-- Every route in application.yml carries a CircuitBreaker filter. Without this
+         starter the filter factory does not exist, route building throws
+         "Unable to find GatewayFilterFactory with name CircuitBreaker" during context
+         refresh, and the gateway crash-loops - so the routing configuration and this
+         dependency have to move together. -->
+    <dependency>
+      <groupId>org.springframework.cloud</groupId>
+      <artifactId>spring-cloud-starter-circuitbreaker-reactor-resilience4j</artifactId>
+    </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
