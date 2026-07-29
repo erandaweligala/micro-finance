@@ -73,22 +73,33 @@ services:
       start_period: 30s
     networks: [mfin]
 
+  # The Apache-published image rather than a vendor rebuild: Bitnami emptied its
+  # public Docker Hub catalogue in 2025 and bitnami/kafka:3.7 stopped resolving,
+  # which broke every fresh checkout of this stack. Note the env var names differ
+  # from Bitnami's - here KAFKA_<A>_<B> maps to the server property a.b.
   kafka:
-    image: bitnami/kafka:3.7
+    image: apache/kafka:3.7.2
     container_name: mfin-kafka
     environment:
       # KRaft mode: no ZooKeeper to run or reason about.
-      KAFKA_CFG_NODE_ID: "1"
-      KAFKA_CFG_PROCESS_ROLES: controller,broker
-      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
-      ALLOW_PLAINTEXT_LISTENER: "yes"
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: controller,broker
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      # One broker, so the internal topics cannot be replicated three ways -
+      # left at the default they fail to create and every producer stalls.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
     ports: ["9092:9092"]
-    volumes: [kafka-data:/bitnami/kafka]
+    # Deliberately no volume. The broker runs unprivileged, so a named volume
+    # mounts root-owned and the log dir is unwritable. Local broker state is
+    # disposable anyway - MySQL is the source of truth and the outbox replays.
     networks: [mfin]
 
   redis:
@@ -258,7 +269,6 @@ services:
 
 volumes:
   mysql-data:
-  kafka-data:
   redis-data:
 
 networks:
